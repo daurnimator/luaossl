@@ -4719,6 +4719,74 @@ EXPORT int luaopen__openssl_pkey(lua_State *L) {
 
 
 /*
+ * openssl.kdf
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if OPENSSL_PREREQ(1,1,0)
+
+#include <openssl/kdf.h>
+
+static int kdf_derive(lua_State *L) {
+	const EVP_MD *md;
+	size_t saltlen, keylen, infolen;
+	const char *salt, *key, *info;
+	EVP_PKEY_CTX *pctx;
+	luaL_Buffer b;
+	size_t outlen = 0;
+
+	md = EVP_get_digestbyname(luaL_checkstring(L, 1));
+	luaL_argcheck(L, md != NULL, 1, "kdf.derive: invalid digest type");
+	salt = luaL_checklstring(L, 2, &saltlen);
+	key = luaL_checklstring(L, 3, &keylen);
+	info = luaL_checklstring(L, 4, &infolen);
+
+	if (!(pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL)))
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_derive_init(pctx) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_CTX_set_hkdf_md(pctx, md) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt, saltlen) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_CTX_set1_hkdf_key(pctx, key, keylen) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_CTX_add1_hkdf_info(pctx, info, infolen) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_derive(pctx, NULL, &outlen) < 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	if (EVP_PKEY_derive(pctx, (unsigned char*)luaL_buffinitsize(L, &b, outlen), &outlen) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
+
+	luaL_pushresultsize(&b, outlen);
+
+	return 1;
+} /* kdf_derive */
+
+
+static const auxL_Reg kdf_globals[] = {
+	{ "derive",    &kdf_derive },
+	{ NULL,        NULL },
+};
+
+int luaopen__openssl_kdf(lua_State *L) {
+	initall(L);
+
+	auxL_newlib(L, kdf_globals, 0);
+
+	return 1;
+} /* luaopen__openssl_kdf() */
+
+#endif
+
+/*
  * Deprecated module name.
  */
 EXPORT int luaopen__openssl_pubkey(lua_State *L) {
