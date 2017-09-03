@@ -28,8 +28,10 @@ init:
   - if %TARGET%==mingw set PATH=%MINGW_PATH%;%PATH%
   # luarocks on mingw defaults to using mingw32-gcc as CC and LD
   - if %TARGET%==mingw set LUAROCKS_FLAGS=CC=gcc LD=gcc
+  - if %TARGET%==mingw set MAKE_FLAGS=CC=gcc LD=gcc
   # set MSVC paths
   - if %TARGET%==vs    call "%ProgramFiles(x86)%\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" %platform%
+  - if %TARGET%==vs    set MAKE_FLAGS=CC=cl  LD=link
 
 before_build:
   - set PATH=C:\Python27\Scripts;%PATH% # Add directory containing 'pip' to PATH
@@ -41,6 +43,7 @@ build_script:
   - copy config.h.guess src\config.h
   - luarocks make luaossl-scm-0.rockspec OPENSSL_DIR=%OPENSSL_DIR% CRYPTO_DIR=%OPENSSL_DIR% %LUAROCKS_FLAGS%
   - luarocks pack luaossl
+  - call %MINGW_PATH%\mingw32-make.exe -f GNUmakefile %MAKE_FLAGS%
 
 test_script:
   - lua -e "require'openssl.digest'"
