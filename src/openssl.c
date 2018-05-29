@@ -297,6 +297,10 @@
 #define HAVE_SSL_CTX_SET_ALPN_SELECT_CB HAVE_SSL_CTX_SET_ALPN_PROTOS
 #endif
 
+#ifndef HAVE_SSL_CTX_SET_CLIENT_HELLO_CALLBACK
+#define HAVE_SSL_CTX_SET_CLIENT_HELLO_CALLBACK OPENSSL_PREREQ(1,1,1)
+#endif
+
 #ifndef HAVE_SSL_CTX_SET_TLSEXT_SERVERNAME_CALLBACK
 #define HAVE_SSL_CTX_SET_TLSEXT_SERVERNAME_CALLBACK (OPENSSL_PREREQ(1,0,0) || LIBRESSL_PREREQ(2,0,0))
 #endif
@@ -2156,6 +2160,7 @@ struct ex_data {
 enum {
 	EX_SSL_CTX_ALPN_SELECT_CB,
 	EX_SSL_CTX_TLSEXT_SERVERNAME_CB,
+	EX_SSL_CTX_CLIENT_HELLO_CB,
 };
 
 static struct ex_type {
@@ -2166,6 +2171,7 @@ static struct ex_type {
 } ex_type[] = {
 	[EX_SSL_CTX_ALPN_SELECT_CB] = { CRYPTO_EX_INDEX_SSL_CTX, -1, &SSL_CTX_get_ex_data, &SSL_CTX_set_ex_data },
 	[EX_SSL_CTX_TLSEXT_SERVERNAME_CB] = { CRYPTO_EX_INDEX_SSL_CTX, -1, &SSL_CTX_get_ex_data, &SSL_CTX_set_ex_data },
+	[EX_SSL_CTX_CLIENT_HELLO_CB] = { CRYPTO_EX_INDEX_SSL_CTX, -1, &SSL_CTX_get_ex_data, &SSL_CTX_set_ex_data },
 };
 
 #if OPENSSL_PREREQ(1,1,0)
@@ -8745,6 +8751,85 @@ static int sx_setAlpnSelect(lua_State *L) {
 
 	return 1;
 } /* sx_setAlpnSelect() */
+#endif
+
+
+#if HAVE_SSL_CTX_SET_CLIENT_HELLO_CALLBACK
+LUA_KFUNCTION(sx_setClientHelloCallback_cb_cont) {
+	switch(status) {
+	case LUA_OK:
+		/* callback should return truthy for success
+		 * or nil + an integer for a controlled error
+		 * everything else will be a fatal internal error
+		 */
+		if (lua_isboolean(L, -2)) {
+			ret = lua_toboolean(L, -2) ? SSL_CLIENT_HELLO_SUCCESS : SSL_CLIENT_HELLO_ERROR;
+		} else {
+			ret = SSL_CLIENT_HELLO_ERROR;
+			if (lua_isnil(L, -2) && lua_isinteger(L, -1))
+				*ad = lua_tointeger(L, -1);
+		}
+		break;
+	case LUA_YIELD:
+		ret = SSL_CLIENT_HELLO_RETRY;
+		break;
+	default:
+		ret = SSL_CLIENT_HELLO_ERROR;
+		break;
+	}
+
+done:
+	lua_settop(L, otop);
+
+	return ret;
+} /* sx_setClientHelloCallback_cb_cont() */
+
+
+static int sx_setClientHelloCallback_cb(SSL *ssl, int *ad, void *_ctx) {
+	SSL_CTX *ctx = _ctx;
+	lua_State *L = NULL;
+	size_t n;
+	int otop, status, ret = SSL_CLIENT_HELLO_ERROR;
+
+	*ad = SSL_AD_INTERNAL_ERROR;
+
+	/* expect at least one value: closure */
+	if ((n = ex_getdata(&L, EX_SSL_CTX_CLIENT_HELLO_CB, ctx)) < 1)
+		return SSL_CLIENT_HELLO_ERROR;
+
+	otop = lua_gettop(L) - n;
+
+	/* pass SSL object as 1st argument */
+	if (ssl_pushsafe(L, ssl))
+		goto done;
+
+	lua_insert(L, otop + 2);
+
+	return sx_setClientHelloCallback_cb_cont(lua_pcallk(L, 1 + (n - 1), 2, 0));
+} /* sx_setClientHelloCallback_cb() */
+
+
+static int sx_setClientHelloCallback(lua_State *L) {
+	SSL_CTX *ctx = checksimple(L, 1, SSL_CTX_CLASS);
+	int error;
+
+	luaL_checktype(L, 2, LUA_TFUNCTION);
+
+	if ((error = ex_setdata(L, EX_SSL_CTX_CLIENT_HELLO_CB, ctx, lua_gettop(L) - 1))) {
+		if (error > 0) {
+			return luaL_error(L, "unable to set client hello callback: %s", aux_strerror(error));
+		} else if (error == auxL_EOPENSSL && !ERR_peek_error()) {
+			return luaL_error(L, "unable to set client hello callback: Unknown internal error");
+		} else {
+			return auxL_error(L, error, "ssl.context:setClientHelloCallback");
+		}
+	}
+	SSL_CTX_set_client_hello_cb(ctx, sx_setClientHelloCallback_cb, ctx);
+
+	lua_pushboolean(L, 1);
+
+	return 1;
+} /* sx_setClientHelloCallback() */
 #endif
 
 
