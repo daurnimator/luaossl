@@ -5201,6 +5201,7 @@ static int gn_checktype(lua_State *L, int index) {
 		{ GEN_IPADD,   "IPAddress" },
 		{ GEN_IPADD,   "IP" },
 		{ GEN_DIRNAME, "DirName" },
+		{ GEN_RID,     "RID" },
 	};
 	const char *type = luaL_checkstring(L, index);
 	unsigned i;
@@ -5254,6 +5255,18 @@ static int gn_add(lua_State *L) {
 		}
 
 		goto text;
+	case GEN_RID:
+		txt = luaL_checkstring(L, 3);
+
+		if (!(gen = GENERAL_NAME_new()))
+			goto error;
+
+		gen->type = type;
+
+		if (!auxS_txt2obj(&gen->d.rid, txt))
+			goto error;
+
+		break;
 	default:
 		txt = luaL_checklstring(L, 3, &len);
 text:
@@ -5352,6 +5365,8 @@ static int gn__next(lua_State *L) {
 			xn_dup(L, name->d.dirn);
 
 			break;
+		case GEN_RID:
+			/* NYI */
 		default:
 			continue;
 		} /* switch() */
