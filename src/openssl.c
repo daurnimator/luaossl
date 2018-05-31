@@ -2412,9 +2412,26 @@ static int ossl_version(lua_State *L) {
 	return 1;
 } /* ossl_version() */
 
+
+static int ossl_createNID(lua_State *L) {
+	const char *oid = luaL_checkstring(L, 1);
+	const char *sn = luaL_optstring(L, 2, NULL);
+	const char *ln = luaL_optstring(L, 3, NULL);
+	int nid;
+
+	if (!(nid = OBJ_create(oid, sn, ln)))
+		auxL_error(L, auxL_EOPENSSL, "createNID");
+
+	lua_pushinteger(L, nid);
+
+	return 1;
+} /* ossl_createNID() */
+
+
 static const auxL_Reg ossl_globals[] = {
-	{ "version", &ossl_version },
-	{ NULL,      NULL },
+	{ "version",   &ossl_version },
+	{ "createNID", &ossl_createNID },
+	{ NULL,        NULL },
 };
 
 /*
