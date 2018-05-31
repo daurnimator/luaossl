@@ -247,6 +247,17 @@
 #define HAVE_I2D_RE_X509_REQ_TBS OPENSSL_PREREQ(1,1,0)
 #endif
 
+/*
+ * i2s_ASN1_IA5STRING and s2i_ASN1_IA5STRING are used in expansion of EXT_IA5STRING
+ * LibreSSL tracking issue: https://github.com/libressl-portable/openbsd/issues/95
+ */
+#ifndef HAVE_I2S_ASN1_IA5STRING
+#define HAVE_I2S_ASN1_IA5STRING OPENSSL_PREREQ(1,0,2)
+#endif
+#ifndef HAVE_S2I_ASN1_IA5STRING
+#define HAVE_S2I_ASN1_IA5STRING OPENSSL_PREREQ(1,0,2)
+#endif
+
 #ifndef HAVE_RSA_GET0_CRT_PARAMS
 #define HAVE_RSA_GET0_CRT_PARAMS (OPENSSL_PREREQ(1,1,0) || LIBRESSL_PREREQ(2,7,0))
 #endif
@@ -1451,6 +1462,14 @@ static struct {
 
 #if !HAVE_ASN1_STRING_GET0_DATA
 #define ASN1_STRING_get0_data(s) ASN1_STRING_data((s))
+#endif
+
+#if !HAVE_I2S_ASN1_IA5STRING
+#define i2s_ASN1_IA5STRING (X509V3_EXT_get_nid(NID_netscape_renewal_url)->i2s)
+#endif
+
+#if !HAVE_S2I_ASN1_IA5STRING
+#define s2i_ASN1_IA5STRING (X509V3_EXT_get_nid(NID_netscape_renewal_url)->s2i)
 #endif
 
 #if !HAVE_DH_GET0_KEY
@@ -5399,6 +5418,55 @@ EXPORT int luaopen__openssl_x509_altname(lua_State *L) {
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+static int xe_registerExtension(lua_State *L) {
+    X509V3_EXT_METHOD tmpext = {0}, *ext = NULL;
+
+	tmpext.ext_nid = luaL_checkinteger(L, 1);
+	luaL_checktype(L, 2, LUA_TTABLE);
+
+	if (lua_getfield(L, 2, "it") != LUA_TNIL) {
+		switch (lua_type(L, -1)) {
+		case LUA_TSTRING: {
+			const char *s = lua_tostring(L, -1);
+			if (!strcmp(s, "IA5STRING")) {
+				tmpext = (X509V3_EXT_METHOD)EXT_IA5STRING(tmpext.ext_nid);
+				break;
+			}
+		}
+		/* FALL THROUGH */
+		default:
+			return luaL_argerror(L, 2, "invalid '.it' member (expected known ASN.1 type)");
+		}
+	}
+	lua_pop(L, 1);
+
+	if (!tmpext.it) {
+		/* TODO: 'old style' d2i/i2d */
+		return luaL_argerror(L, 2, "'.it' member required");
+	}
+
+	/* TODO: custom serialisation/deserialisation */
+
+	if ((ext = OPENSSL_malloc(sizeof(*ext))) == NULL)
+		goto error;
+
+	tmpext.ext_flags = X509V3_EXT_DYNAMIC;
+	*ext = tmpext;
+
+	if (!X509V3_EXT_add(ext))
+		goto error;
+
+	lua_pushboolean(L, 1);
+
+	return 1;
+
+error:
+	if (ext)
+		OPENSSL_free(ext);
+	return auxL_error(L, auxL_EOPENSSL, "x509.extension.registerExtension");
+} /* xe_registerExtension() */
+
+
 static _Bool xe_new_isder(const char *value, _Bool *crit) {
 	if (!strcmp(value, "critical,DER"))
 		return (*crit = 1), 1;
@@ -5675,6 +5743,7 @@ static const auxL_Reg xe_metatable[] = {
 static const auxL_Reg xe_globals[] = {
 	{ "new",       &xe_new },
 	{ "interpose", &xe_interpose },
+	{ "registerExtension", &xe_registerExtension },
 	{ NULL,        NULL },
 };
 
