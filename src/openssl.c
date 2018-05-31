@@ -5267,6 +5267,38 @@ static int gn_add(lua_State *L) {
 			goto error;
 
 		break;
+	case GEN_OTHERNAME: {
+		const char *objtmp = NULL, *p;
+
+		txt = luaL_checkstring(L, 3);
+
+		if ((p = strchr(txt, ';')) == NULL)
+			return luaL_argerror(L, 3, "invalid otherName: must contain semicolon");
+
+		objtmp = lua_pushlstring(L, txt, (p - txt));
+
+		if (!(gen = GENERAL_NAME_new()))
+			goto error;
+
+		gen->type = type;
+
+
+		if ((gen->d.otherName = OTHERNAME_new()) == NULL)
+			goto error;
+
+		/*
+		 * Free this up because we will overwrite it. no need to free type_id
+		 * because it is static
+		 */
+		ASN1_TYPE_free(gen->d.otherName->value);
+		if ((gen->d.otherName->value = ASN1_generate_v3((char*)p + 1, NULL)) == NULL)
+			goto error;
+
+		if (!auxS_txt2obj(&gen->d.otherName->type_id, objtmp))
+			goto error;
+
+		break;
+	}
 	default:
 		txt = luaL_checklstring(L, 3, &len);
 text:
@@ -5366,6 +5398,7 @@ static int gn__next(lua_State *L) {
 
 			break;
 		case GEN_RID:
+		case GEN_OTHERNAME:
 			/* NYI */
 		default:
 			continue;
