@@ -2005,6 +2005,73 @@ static int compat_X509_up_ref(X509 *crt) {
  */
 #endif
 
+
+#if !HAVE_DH_CHECK_EX
+
+/* Taken from OpenSSL 1.1.1 */
+#define DH_F_DH_CHECK_EX                                 121
+#define DH_R_CHECK_INVALID_J_VALUE                       115
+#define DH_R_CHECK_INVALID_Q_VALUE                       116
+#define DH_R_CHECK_PUBKEY_INVALID                        122
+#define DH_R_CHECK_PUBKEY_TOO_LARGE                      123
+#define DH_R_CHECK_PUBKEY_TOO_SMALL                      124
+#define DH_R_CHECK_P_NOT_PRIME                           117
+#define DH_R_CHECK_P_NOT_SAFE_PRIME                      118
+#define DH_R_CHECK_Q_NOT_PRIME                           119
+#define DH_R_MISSING_PUBKEY                              125
+#define DH_R_NOT_SUITABLE_GENERATOR                      120
+#define DH_R_UNABLE_TO_CHECK_GENERATOR                   121
+
+static int DH_check_ex(const DH *dh) {
+    int errflags = 0;
+
+    (void)DH_check(dh, &errflags);
+
+    if ((errflags & DH_NOT_SUITABLE_GENERATOR) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_NOT_SUITABLE_GENERATOR);
+    if ((errflags & DH_CHECK_Q_NOT_PRIME) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_CHECK_Q_NOT_PRIME);
+    if ((errflags & DH_CHECK_INVALID_Q_VALUE) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_CHECK_INVALID_Q_VALUE);
+    if ((errflags & DH_CHECK_INVALID_J_VALUE) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_CHECK_INVALID_J_VALUE);
+    if ((errflags & DH_UNABLE_TO_CHECK_GENERATOR) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_UNABLE_TO_CHECK_GENERATOR);
+    if ((errflags & DH_CHECK_P_NOT_PRIME) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_CHECK_P_NOT_PRIME);
+    if ((errflags & DH_CHECK_P_NOT_SAFE_PRIME) != 0)
+        DHerr(DH_F_DH_CHECK_EX, DH_R_CHECK_P_NOT_SAFE_PRIME);
+
+    return errflags == 0;
+}
+
+#ifndef OPENSSL_NO_ERR
+static ERR_STRING_DATA DH_strs[] = {
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_INVALID_J_VALUE),
+    "check invalid j value"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_INVALID_Q_VALUE),
+    "check invalid q value"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_PUBKEY_INVALID),
+    "check pubkey invalid"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_PUBKEY_TOO_LARGE),
+    "check pubkey too large"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_PUBKEY_TOO_SMALL),
+    "check pubkey too small"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_P_NOT_PRIME), "check p not prime"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_P_NOT_SAFE_PRIME),
+    "check p not safe prime"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_CHECK_Q_NOT_PRIME), "check q not prime"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_MISSING_PUBKEY), "missing pubkey"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_NOT_SUITABLE_GENERATOR),
+    "not suitable generator"},
+    {ERR_PACK(ERR_LIB_DH, 0, DH_R_UNABLE_TO_CHECK_GENERATOR),
+    "unable to check generator"},
+    {0, NULL}
+};
+#endif
+
+#endif
+
 /* compat_init must not be called from multiple threads at once */
 static int compat_init(void) {
 	static int store_index = -1, ssl_ctx_index = -1, done;
@@ -2012,6 +2079,10 @@ static int compat_init(void) {
 
 	if (done)
 		goto epilog;
+
+#ifndef OPENSSL_NO_ERR
+	ERR_load_strings(ERR_LIB_DH, DH_strs);
+#endif
 
 #if defined compat_X509_STORE_free
 	/*
@@ -4554,6 +4625,102 @@ sslerr:
 } /* pk_setParameters() */
 
 
+static int pk_checkPublic(lua_State *L) {
+	EVP_PKEY *key = checksimple(L, 1, PKEY_CLASS);
+	int res;
+
+	/* TODO: Once OpenSSL 1.1.1 is released, use EVP_PKEY_public_check */
+
+	switch (EVP_PKEY_base_id(key)) {
+	case EVP_PKEY_DH: {
+		int codes;
+		const DH *dh;
+
+		if (!(dh = EVP_PKEY_get0(key)))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:checkPublic");
+
+		res = DH_check_ex(dh);
+
+		break;
+	}
+#ifndef OPENSSL_NO_EC
+	case EVP_PKEY_EC: {
+		const EC_KEY *ec;
+		const EC_GROUP *group;
+
+		if (!(ec = EVP_PKEY_get0(key)))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:checkPublic");
+
+		res = EC_KEY_check_key(ec);
+
+		break;
+	}
+#endif
+	default:
+		res = 0;
+		ERR_PUT_error(ERR_LIB_EVP,0,EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE,OPENSSL_FILE,OPENSSL_LINE);
+	}
+
+	lua_pushboolean(L, res);
+	if (res)
+		return 1;
+
+	auxL_pusherror(L, auxL_EOPENSSL, NULL);
+	return 2;
+} /* pk_checkPublic() */
+
+
+static int pk_checkParameters(lua_State *L) {
+	EVP_PKEY *key = checksimple(L, 1, PKEY_CLASS);
+	int res;
+
+	/* TODO: Once OpenSSL 1.1.1 is released, use EVP_PKEY_param_check */
+
+	switch (EVP_PKEY_base_id(key)) {
+	case EVP_PKEY_DH: {
+		int codes;
+		const DH *dh;
+
+		if (!(dh = EVP_PKEY_get0(key)))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:checkParameters");
+
+		if (!DH_check_params(dh, &codes))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:checkParameters");
+
+		res = (codes == 0);
+
+		break;
+	}
+#ifndef OPENSSL_NO_EC
+	case EVP_PKEY_EC: {
+		const EC_KEY *ec;
+		const EC_GROUP *group;
+
+		if (!(ec = EVP_PKEY_get0(key)))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:checkParameters");
+
+		if (!(group = EC_KEY_get0_group(ec)))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:checkParameters");
+
+		res = EC_GROUP_check(group, NULL);
+
+		break;
+	}
+#endif
+	default:
+		res = 0;
+		ERR_PUT_error(ERR_LIB_EVP,0,EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE,OPENSSL_FILE,OPENSSL_LINE);
+	}
+
+	lua_pushboolean(L, res);
+	if (res)
+		return 1;
+
+	auxL_pusherror(L, auxL_EOPENSSL, NULL);
+	return 2;
+} /* pk_checkParameters() */
+
+
 static int pk__tostring(lua_State *L) {
 	EVP_PKEY *key = checksimple(L, 1, PKEY_CLASS);
 	int type = optencoding(L, 2, "pem", X509_PEM|X509_DER);
@@ -4648,6 +4815,8 @@ static const auxL_Reg pk_methods[] = {
 	{ "getDefaultDigestName", &pk_getDefaultDigestName },
 	{ "getParameters", &pk_getParameters },
 	{ "setParameters", &pk_setParameters },
+	{ "checkPublic",   &pk_checkPublic },
+	{ "checkParameters", &pk_checkParameters },
 #if HAVE_EVP_PKEY_CTX_NEW
 	{ "decrypt",       &pk_decrypt },
 	{ "encrypt",       &pk_encrypt },
