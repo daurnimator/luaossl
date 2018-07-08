@@ -3980,6 +3980,109 @@ static int pk_verify(lua_State *L) {
 } /* pk_verify() */
 
 
+static int EVP_PKEY_CTX__gc(lua_State *L) {
+	EVP_PKEY_CTX **res = lua_touserdata(L, 1);
+
+	if (*res) {
+		EVP_PKEY_CTX_free(*res);
+		*res = NULL;
+	}
+
+	return 0;
+} /* EVP_PKEY_CTX__gc() */
+
+
+static int pk_derive(lua_State *L) {
+	int type;
+	EVP_PKEY_CTX *pctx **pctxp;
+	luaL_Buffer b;
+	size_t outlen = 0;
+
+	luaL_checktype(L, 1, LUA_TTABLE);
+
+	/* ensure EVP_PKEY_CTX is collected on error */
+	pctxp = prepudata(L, sizeof(EVP_PKEY_CTX*), NULL, &EVP_PKEY_CTX__gc);
+
+	// if (lua_getfield(L, 1, "key") != LUA_TNIL) {
+	// 	EVP_PKEY *key = checksimple(L, -1, PKEY_CLASS);
+	// 	if (!(*pctxp = pctx = EVP_PKEY_CTX_new(key, NULL)))
+	// 		return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+	// }
+	// lua_pop(L, 1);
+
+	luaL_argcheck(L, lua_getfield(L, 1, "type") == LUA_TSTRING, 1, ".type field expected");
+	switch (auxL_checkoption(L, -1, 0, (const char *[]){ "hkdf", NULL }, 0)) {
+	case 0: /* hkdf */ {
+		type = EVP_PKEY_HKDF;
+		break;
+	}
+	/* TODO: EVP_PKEY_TLS1_PRF */
+	default:
+		return luaL_argerror(L, 1, "unknown .type");
+	}
+	lua_pop(L, 1);
+
+	if (!(*pctxp = pctx = EVP_PKEY_CTX_new_id(type, NULL)))
+		return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+
+	// if (lua_getfield(L, 1, "peer") != LUA_TNIL) {
+	// 	EVP_PKEY *peer_key = checksimple(L, -1, PKEY_CLASS);
+	// 	if (EVP_PKEY_derive_set_peer(pctx, peer_key) <= 0)
+	// 		return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+	// }
+	// lua_pop(L, 1);
+
+	switch (type) {
+	case EVP_PKEY_HKDF:
+		if (lua_getfield(L, 1, "hkdf_md") != LUA_TNIL) {
+			const EVP_MD *md = EVP_get_digestbyname(luaL_checkstring(L, -1));
+			luaL_argcheck(L, md != NULL, 1, "pk.derive: invalid digest type");
+			if (EVP_PKEY_CTX_set_hkdf_md(pctx, md) <= 0)
+				return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+		}
+		lua_pop(L, 1);
+
+		if (lua_getfield(L, 1, "hkdf_salt") != LUA_TNIL) {
+			size_t saltlen;
+			const char *salt = luaL_checklstring(L, -1, &saltlen);
+			if (EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt, saltlen) <= 0)
+				return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+		}
+		lua_pop(L, 1);
+
+		if (lua_getfield(L, 1, "hkdf_key") != LUA_TNIL) {
+			size_t keylen;
+			const char *key = luaL_checklstring(L, -1, &keylen);
+			if (EVP_PKEY_CTX_set1_hkdf_key(pctx, key, keylen) <= 0)
+				return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+		}
+		lua_pop(L, 1);
+
+		if (lua_getfield(L, 1, "hkdf_info") != LUA_TNIL) {
+			size_t infolen;
+			const char *info = luaL_checklstring(L, -1, &infolen);
+			if (EVP_PKEY_CTX_add1_hkdf_info(pctx, info, infolen) <= 0)
+				return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+		}
+		lua_pop(L, 1);
+		break;
+	}
+
+	if (EVP_PKEY_derive_init(pctx) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+
+	if (EVP_PKEY_derive(pctx, NULL, &outlen) < 0)
+		return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+
+	if (EVP_PKEY_derive(pctx, (unsigned char*)luaL_buffinitsize(L, &b, outlen), &outlen) <= 0)
+		return auxL_error(L, auxL_EOPENSSL, "pk.derive");
+
+	luaL_pushresultsize(&b, outlen);
+
+	return 1;
+} /* pk_derive */
+
+
 static int pk_toPEM(lua_State *L) {
 	EVP_PKEY *key = checksimple(L, 1, PKEY_CLASS);
 	int top, i, ok;
@@ -4727,48 +4830,6 @@ EXPORT int luaopen__openssl_pkey(lua_State *L) {
 
 #include <openssl/kdf.h>
 
-static int kdf_derive(lua_State *L) {
-	const EVP_MD *md;
-	size_t saltlen, keylen, infolen;
-	const char *salt, *key, *info;
-	EVP_PKEY_CTX *pctx;
-	luaL_Buffer b;
-	size_t outlen = 0;
-
-	md = EVP_get_digestbyname(luaL_checkstring(L, 1));
-	luaL_argcheck(L, md != NULL, 1, "kdf.derive: invalid digest type");
-	salt = luaL_checklstring(L, 2, &saltlen);
-	key = luaL_checklstring(L, 3, &keylen);
-	info = luaL_checklstring(L, 4, &infolen);
-
-	if (!(pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL)))
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_derive_init(pctx) <= 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_CTX_set_hkdf_md(pctx, md) <= 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt, saltlen) <= 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_CTX_set1_hkdf_key(pctx, key, keylen) <= 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_CTX_add1_hkdf_info(pctx, info, infolen) <= 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_derive(pctx, NULL, &outlen) < 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	if (EVP_PKEY_derive(pctx, (unsigned char*)luaL_buffinitsize(L, &b, outlen), &outlen) <= 0)
-		return auxL_error(L, auxL_EOPENSSL, "kdf.derive");
-
-	luaL_pushresultsize(&b, outlen);
-
-	return 1;
-} /* kdf_derive */
 
 
 static const auxL_Reg kdf_globals[] = {
