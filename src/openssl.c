@@ -275,6 +275,14 @@
 #define HAVE_SSL_CLIENT_VERSION OPENSSL_PREREQ(1,1,0)
 #endif
 
+#ifndef HAVE_SSL_CTX_ADD1_CA_LIST
+#define HAVE_SSL_CTX_ADD1_CA_LIST OPENSSL_PREREQ(1,1,1)
+#endif
+
+#ifndef HAVE_SSL_CTX_GET0_CA_LIST
+#define HAVE_SSL_CTX_GET0_CA_LIST OPENSSL_PREREQ(1,1,1)
+#endif
+
 #ifndef HAVE_SSL_CTX_GET0_PARAM
 #define HAVE_SSL_CTX_GET0_PARAM (OPENSSL_PREREQ(1,0,2) || LIBRESSL_PREREQ(2,7,0))
 #endif
@@ -311,6 +319,10 @@
 #define HAVE_SSL_CTX_SET1_PARAM (OPENSSL_PREREQ(1,0,2) || LIBRESSL_PREREQ(2,1,0))
 #endif
 
+#ifndef HAVE_SSL_CTX_SET0_CA_LIST
+#define HAVE_SSL_CTX_SET0_CA_LIST OPENSSL_PREREQ(1,1,1)
+#endif
+
 #ifndef HAVE_SSL_CTX_UP_REF
 #define HAVE_SSL_CTX_UP_REF (OPENSSL_PREREQ(1,1,0) || LIBRESSL_PREREQ(2,7,0))
 #endif
@@ -335,8 +347,16 @@
 #define HAVE_SSL_CTX_GET_TLSEXT_TICKET_KEYS OPENSSL_PREREQ(1,0,0)
 #endif
 
+#ifndef HAVE_SSL_ADD1_CA_LIST
+#define HAVE_SSL_ADD1_CA_LIST OPENSSL_PREREQ(1,1,1)
+#endif
+
 #ifndef HAVE_SSL_GET0_ALPN_SELECTED
 #define HAVE_SSL_GET0_ALPN_SELECTED HAVE_SSL_CTX_SET_ALPN_PROTOS
+#endif
+
+#ifndef HAVE_SSL_GET0_CA_LIST
+#define HAVE_SSL_GET0_CA_LIST OPENSSL_PREREQ(1,1,1)
 #endif
 
 #ifndef HAVE_SSL_GET0_PARAM
@@ -345,6 +365,10 @@
 
 #ifndef HAVE_SSL_SET_ALPN_PROTOS
 #define HAVE_SSL_SET_ALPN_PROTOS HAVE_SSL_CTX_SET_ALPN_PROTOS
+#endif
+
+#ifndef HAVE_SSL_SET0_CA_LIST
+#define HAVE_SSL_SET0_CA_LIST OPENSSL_PREREQ(1,1,1)
 #endif
 
 #ifndef HAVE_SSL_SET1_CHAIN_CERT_STORE
@@ -1813,6 +1837,18 @@ static int compat_SSL_set1_param(SSL *ssl, X509_VERIFY_PARAM *vpm) {
 } /* compat_SSL_set1_param() */
 #endif
 
+#if !HAVE_SSL_GET0_CA_LIST
+#define SSL_get0_CA_list SSL_get_client_CA_list
+#endif
+
+#if !HAVE_SSL_SET0_CA_LIST
+#define SSL_set0_CA_list SSL_set_client_CA_list
+#endif
+
+#if !HAVE_SSL_ADD1_CA_LIST
+#define SSL_add1_CA_list SSL_add_client_CA
+#endif
+
 #if !HAVE_SSL_UP_REF
 #define SSL_up_ref(...) EXPAND( compat_SSL_up_ref(__VA_ARGS__) )
 
@@ -1867,6 +1903,18 @@ static int compat_SSL_CTX_up_ref(SSL_CTX *ctx) {
 
 	return 1;
 } /* compat_SSL_CTX_up_ref() */
+#endif
+
+#if !HAVE_SSL_CTX_GET0_CA_LIST
+#define SSL_CTX_get0_CA_list SSL_CTX_get_client_CA_list
+#endif
+
+#if !HAVE_SSL_CTX_SET0_CA_LIST
+#define SSL_CTX_set0_CA_list SSL_CTX_set_client_CA_list
+#endif
+
+#if !HAVE_SSL_CTX_ADD1_CA_LIST
+#define SSL_CTX_add1_CA_list SSL_CTX_add_client_CA
 #endif
 
 #if !HAVE_STACK_OPENSSL_STRING_FUNCS
@@ -8761,6 +8809,92 @@ static int sx_setEphemeralKey(lua_State *L) {
 } /* sx_setEphemeralKey() */
 
 
+static int sk_X509_NAME__gc(lua_State *L) {
+	STACK_OF(X509_NAME) **res = lua_touserdata(L, 1);
+
+	if (*res) {
+		sk_X509_NAME_pop_free(*res, X509_NAME_free);
+		*res = NULL;
+	}
+
+	return 0;
+} /* sk_X509_NAME__gc() */
+
+
+static STACK_OF(X509_NAME)* check_sk_X509_NAME(lua_State *L, int index) {
+	index = lua_absindex(L, index);
+	STACK_OF(X509_NAME) **name_list = prepsimple(L, NULL, &sk_X509_NAME__gc);
+	size_t n;
+
+	luaL_checktype(L, index, LUA_TTABLE);
+
+	if (!(*name_list = sk_X509_NAME_new_null()))
+		auxL_error(L, auxL_EOPENSSL, "check_sk_X509_NAME");
+
+
+	for (n = 1; rawgeti(L, index, n); n++) {
+		X509_NAME *name;
+
+		if (!(name = testsimple(L, -1, X509_NAME_CLASS)))
+			luaL_argerror(L, index, "array of X509_NAME expected");
+
+		if (!(name = X509_NAME_dup(name)))
+			auxL_error(L, auxL_EOPENSSL, "check_sk_X509_NAME");
+
+		if (!sk_X509_NAME_push(*name_list, name)) {
+			X509_NAME_free(name);
+			auxL_error(L, auxL_EOPENSSL, "check_sk_X509_NAME");
+		}
+
+		lua_pop(L, 1);
+	}
+
+	return *name_list;
+} /* check_sk_X509_NAME() */
+
+
+static int sx_setCAList(lua_State *L) {
+	SSL_CTX *ctx = checksimple(L, 1, SSL_CTX_CLASS);
+	STACK_OF(X509_NAME) *name_list = check_sk_X509_NAME(L, 2);
+
+	SSL_CTX_set0_CA_list(ctx, name_list);
+
+	lua_pushboolean(L, 1);
+
+	return 1;
+} /* sx_setCAList() */
+
+
+static int sx_addCAList(lua_State *L) {
+	SSL_CTX *ctx = checksimple(L, 1, SSL_CTX_CLASS);
+	X509 *cert = checksimple(L, 2, X509_CERT_CLASS);
+
+	if (!SSL_CTX_add1_CA_list(ctx, cert))
+		auxL_error(L, auxL_EOPENSSL, "ssl.context:addCAList");
+
+	lua_pushboolean(L, 1);
+
+	return 1;
+} /* sx_addCAList() */
+
+
+static int sx_getCAList(lua_State *L) {
+	SSL_CTX *ctx = checksimple(L, 1, SSL_CTX_CLASS);
+	STACK_OF(X509_NAME) *name_list;
+	int n;
+
+	name_list = SSL_CTX_get0_CA_list(ctx);
+	n = sk_X509_NAME_num(name_list);
+	lua_createtable(L, n, 0);
+	for (; n>0; n--) {
+		xn_dup(L, sk_X509_NAME_value(name_list, n-1));
+		lua_rawseti(L, -2, n);
+	}
+
+	return 1;
+} /* sx_getCAList() */
+
+
 #if HAVE_SSL_CTX_SET_ALPN_PROTOS
 static int sx_setAlpnProtos(lua_State *L) {
 	SSL_CTX *ctx = checksimple(L, 1, SSL_CTX_CLASS);
@@ -9073,6 +9207,9 @@ static const auxL_Reg sx_methods[] = {
 	{ "setCurvesList",    &sx_setCurvesList },
 #endif
 	{ "setEphemeralKey",  &sx_setEphemeralKey },
+	{ "setCAList",        &sx_setCAList },
+	{ "addCAList",        &sx_addCAList },
+	{ "getCAList",        &sx_getCAList },
 #if HAVE_SSL_CTX_SET_ALPN_PROTOS
 	{ "setAlpnProtos",    &sx_setAlpnProtos },
 #endif
@@ -9657,6 +9794,65 @@ static int ssl_getClientVersion(lua_State *L) {
 } /* ssl_getClientVersion() */
 
 
+static int ssl_setCAList(lua_State *L) {
+	SSL *ssl = checksimple(L, 1, SSL_CLASS);
+	STACK_OF(X509_NAME) *name_list = check_sk_X509_NAME(L, 2);
+
+	SSL_set0_CA_list(ssl, name_list);
+
+	lua_pushboolean(L, 1);
+
+	return 1;
+} /* ssl_setCAList() */
+
+
+static int ssl_addCAList(lua_State *L) {
+	SSL *ssl = checksimple(L, 1, SSL_CLASS);
+	X509 *cert = checksimple(L, 2, X509_CERT_CLASS);
+
+	if (!SSL_add1_CA_list(ssl, cert))
+		auxL_error(L, auxL_EOPENSSL, "ssl:addCAList");
+
+	lua_pushboolean(L, 1);
+
+	return 1;
+} /* ssl_addCAList() */
+
+
+static int ssl_getCAList(lua_State *L) {
+	SSL *ssl = checksimple(L, 1, SSL_CLASS);
+	STACK_OF(X509_NAME) *name_list;
+	int n;
+
+	name_list = SSL_get0_CA_list(ssl);
+	n = sk_X509_NAME_num(name_list);
+	lua_createtable(L, n, 0);
+	for (; n>1; n--) {
+		xn_dup(L, sk_X509_NAME_value(name_list, n-1));
+		lua_rawseti(L, -2, n);
+	}
+
+	return 1;
+} /* ssl_getCAList() */
+
+
+static int ssl_getPeerCAList(lua_State *L) {
+	SSL *ssl = checksimple(L, 1, SSL_CLASS);
+	STACK_OF(X509_NAME) *name_list;
+	int n;
+
+	name_list = SSL_get0_peer_CA_list(ssl);
+	n = sk_X509_NAME_num(name_list);
+	lua_createtable(L, n, 0);
+	for (; n>1; n--) {
+		xn_dup(L, sk_X509_NAME_value(name_list, n-1));
+		lua_rawseti(L, -2, n);
+	}
+
+	return 1;
+} /* ssl_getCAList() */
+
+
 #if HAVE_SSL_GET0_ALPN_SELECTED
 static int ssl_getAlpnSelected(lua_State *L) {
 	SSL *ssl = checksimple(L, 1, SSL_CLASS);
@@ -9830,6 +10026,9 @@ static const auxL_Reg ssl_methods[] = {
 	{ "getServerTemporaryKey", &ssl_getServerTemporaryKey },
 #endif
 	{ "getClientVersion", &ssl_getClientVersion },
+	{ "setCAList",        &ssl_setCAList },
+	{ "addCAList",        &ssl_addCAList },
+	{ "getCAList",        &ssl_getCAList },
 #if HAVE_SSL_GET0_ALPN_SELECTED
 	{ "getAlpnSelected",  &ssl_getAlpnSelected },
 #endif
